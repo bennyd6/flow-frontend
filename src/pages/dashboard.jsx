@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   LayoutDashboard, FolderKanban, Users, X, UserPlus, Send, 
-  PlusCircle, ChevronsLeft, MessageSquare, LogOut, Video, Mic, MicOff, VideoOff
+  PlusCircle, ChevronsLeft, MessageSquare, LogOut, Video, Mic, MicOff, VideoOff, Download
 } from 'lucide-react';
 import io from 'socket.io-client';
 import { useNavigate } from 'react-router-dom';
@@ -200,7 +200,6 @@ const VideoCallModal = ({ isOpen, onClose, roomId, username }) => {
         });
         socketRef.current.on("signal", async ({ from, data }) => {
             let entry = peersRef.current.get(from);
-            // Username is unknown for incoming offers, but that's okay.
             if (!entry) entry = await createPeerEntry(from, 'Anonymous');
             const { pc } = entry;
             if (data.type === "offer") {
@@ -359,6 +358,39 @@ export default function Dashboard() {
   const openStatusModal = (task) => { setTaskToUpdate(task); setStatusModalOpen(true); };
   const handleStatusUpdate = (updatedTask) => setTasks(prevTasks => prevTasks.map(t => t._id === updatedTask._id ? updatedTask : t));
   
+  const handleDownloadReport = () => {
+    if (!selectedProject) return;
+
+    let reportContent = `Project Report: ${selectedProject.name}\n`;
+    reportContent += `Generated on: ${new Date().toLocaleString()}\n`;
+    reportContent += `-------------------------------------------\n\n`;
+    reportContent += `Description: ${selectedProject.description}\n\n`;
+    reportContent += `Team Lead: ${selectedProject.teamLead.name} (${selectedProject.teamLead.email})\n`;
+    reportContent += `Team Members:\n`;
+    selectedProject.team.forEach(member => {
+        reportContent += `  - ${member.name} (${member.email})\n`;
+    });
+    reportContent += `\n-------------------------------------------\n`;
+    reportContent += `Tasks Summary (${tasks.length} total):\n\n`;
+
+    tasks.forEach(task => {
+        reportContent += `Task: ${task.title}\n`;
+        reportContent += `  - Status: ${task.status.charAt(0).toUpperCase() + task.slice(1)}\n`;
+        reportContent += `  - Assigned to: ${task.assignedTo.name}\n`;
+        reportContent += `  - Due Date: ${new Date(task.dueDate).toLocaleDateString()}\n\n`;
+    });
+
+    const blob = new Blob([reportContent], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${selectedProject.name}-Report.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   const isTeamLead = selectedProject && currentUser && selectedProject.teamLead._id === currentUser._id;
   const isTeamMember = selectedProject && currentUser && (isTeamLead || selectedProject.team.some(member => member._id === currentUser._id));
   const filteredTasks = isTeamLead ? tasks : tasks.filter(task => task.assignedTo._id === currentUser?._id);
@@ -389,7 +421,7 @@ export default function Dashboard() {
                             <Video size={16} /><span>{isCallActive ? 'Join Call' : 'Start Video Call'}</span>
                         </button>
                     )}
-                   {isTeamLead && <><button onClick={() => setTeamModalOpen(true)} className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-indigo-600 bg-indigo-50 rounded-lg hover:bg-indigo-100"><UserPlus size={16} /><span>Manage Team</span></button><button onClick={() => setTaskModalOpen(true)} className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg shadow-sm hover:bg-indigo-700"><PlusCircle size={16} /><span>New Task</span></button></>}</div></div>
+                   {isTeamLead && <><button onClick={() => setTeamModalOpen(true)} className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-indigo-600 bg-indigo-50 rounded-lg hover:bg-indigo-100"><UserPlus size={16} /><span>Manage Team</span></button><button onClick={() => setTaskModalOpen(true)} className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg shadow-sm hover:bg-indigo-700"><PlusCircle size={16} /><span>New Task</span></button><button onClick={handleDownloadReport} className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-gray-200 rounded-lg hover:bg-gray-300"><Download size={16} /><span>Download Report</span></button></>}</div></div>
                     <div className="bg-white rounded-xl shadow-md border border-gray-200 overflow-hidden">
                       <div className="grid grid-cols-12 px-6 py-3 text-xs font-semibold text-gray-500 uppercase bg-gray-50 border-b"><div className="col-span-4">Task</div><div className="col-span-2">Status</div><div className="col-span-2">Assigned By</div><div className="col-span-2">Assigned To</div><div className="col-span-2">Due Date</div></div>
                       <div>{filteredTasks.map((task) => <motion.div key={task._id} className="grid grid-cols-12 items-center px-6 py-4 border-b border-gray-100 text-sm"><div className="col-span-4 font-semibold">{task.title}</div><div className="col-span-2"><StatusBadge status={task.status} onClick={() => openStatusModal(task)} /></div><div className="col-span-2">{task.assignedBy.name}</div><div className="col-span-2">{task.assignedTo.name}</div><div className="col-span-2 text-gray-600">{new Date(task.dueDate).toLocaleDateString()}</div></motion.div>)}</div>
@@ -414,5 +446,4 @@ export default function Dashboard() {
         </motion.div>
       </div>
     </>
-  );
-}
+  )
