@@ -1,5 +1,6 @@
 // src/pages/Landing.jsx
 import React from 'react';
+import { Link } from 'react-router-dom';
 import { motion } from "framer-motion";
 import { ArrowRight, GitBranch, MessageSquare, Users, Zap, Clock, BarChart2, Github } from "lucide-react";
 
@@ -104,12 +105,18 @@ export default function Landing() {
                 transition={{ duration: 0.5, delay: 0.2 }}
                 className="flex items-center space-x-2"
               >
-                <Button variant="outline" className="rounded-lg border-indigo-100 text-indigo-600 hover:bg-indigo-50">
-                  Log in
-                </Button>
-                <Button className="bg-indigo-600 hover:bg-indigo-700 rounded-lg">
-                  Get Started <ArrowRight className="ml-2 h-4 w-4" />
-                </Button>
+<div className="flex gap-4">
+      <Link to="/login">
+        <Button variant="outline" className="rounded-lg border-indigo-100 text-indigo-600 hover:bg-indigo-50">
+          Log in
+        </Button>
+      </Link>
+      <Link to="/signup">
+        <Button className="bg-indigo-600 hover:bg-indigo-700 rounded-lg">
+          Get Started <ArrowRight className="ml-2 h-4 w-4" />
+        </Button>
+      </Link>
+    </div>
               </motion.div>
             </div>
           </div>
