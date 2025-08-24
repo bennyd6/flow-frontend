@@ -23,7 +23,7 @@ export default function Signup() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     // API Call
-    const response = await fetch("http://localhost:3000/api/auth/createuser", {
+    const response = await fetch("https://flow-backend-ztda.onrender.com/api/auth/createuser", {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'

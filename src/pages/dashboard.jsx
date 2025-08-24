@@ -7,8 +7,8 @@ import {
 import io from 'socket.io-client';
 import { useNavigate } from 'react-router-dom';
 
-const socket = io.connect("http://localhost:3000");
-const host = "http://localhost:3000";
+const socket = io.connect("https://flow-backend-ztda.onrender.com");
+const host = "https://flow-backend-ztda.onrender.com";
 
 // --- Sub-Components ---
 
