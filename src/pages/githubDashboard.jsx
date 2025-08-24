@@ -37,7 +37,16 @@ export default function GithubDashboard() {
         setRepos(reposRes.data);
         setLanguages(languagesRes.data);
       } catch (err) {
-        setError(err.response?.data?.error || "Failed to fetch GitHub data. Make sure your GitHub profile URL is set correctly.");
+        if (err.response) {
+          // The server responded with a status code outside the 2xx range
+          setError(err.response.data.error || `Server Error: ${err.response.status}. Please ensure your GitHub profile URL is set correctly.`);
+        } else if (err.request) {
+          // The request was made but no response was received (likely CORS or network issue)
+          setError("Network Error: Could not connect to the server. Please check the server's CORS policy and your connection.");
+        } else {
+          // Something else happened while setting up the request
+          setError("An unexpected error occurred while fetching data.");
+        }
       } finally {
         setLoading(false);
       }
@@ -47,7 +56,7 @@ export default function GithubDashboard() {
   }, [navigate]);
 
   if (loading) return <div className="flex items-center justify-center h-screen"><h2>⏳ Loading GitHub Stats...</h2></div>;
-  if (error) return <div className="flex items-center justify-center h-screen"><h2 className="text-red-500">❌ {error}</h2></div>;
+  if (error) return <div className="flex items-center justify-center h-screen text-center p-4"><h2 className="text-red-500">❌ {error}</h2></div>;
 
   const languageData = Object.entries(languages).map(([lang, count]) => ({ name: lang, value: count }));
   const topRepos = repos.sort((a, b) => b.stargazers_count - a.stargazers_count).slice(0, 5);
