@@ -2,13 +2,14 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   LayoutDashboard, FolderKanban, Users, X, UserPlus, Send, 
-  PlusCircle, ChevronsLeft, MessageSquare, LogOut, Video
+  PlusCircle, ChevronsLeft, MessageSquare, LogOut, Video, Mic, MicOff, VideoOff
 } from 'lucide-react';
 import io from 'socket.io-client';
 import { useNavigate } from 'react-router-dom';
 
-const socket = io.connect("https://flow-backend-ztda.onrender.com");
 const host = "https://flow-backend-ztda.onrender.com";
+const chatSocket = io.connect(host);
+const SIGNAL_URL = `${host}/video`;
 
 // --- Sub-Components ---
 
@@ -102,6 +103,158 @@ const StatusUpdateModal = ({ isOpen, onClose, task, onStatusUpdate, isTeamLead }
     );
 };
 
+const VideoCallModal = ({ isOpen, onClose, roomId, username }) => {
+    const [joined, setJoined] = useState(false);
+    const [micOn, setMicOn] = useState(true);
+    const [camOn, setCamOn] = useState(true);
+
+    const socketRef = useRef(null);
+    const localStreamRef = useRef(null);
+    const peersRef = useRef(new Map());
+    const [, forceRender] = useState(0);
+    const localVideoRef = useRef(null);
+
+    const leaveRoom = () => {
+        if (socketRef.current) {
+            socketRef.current.emit("leave-room");
+            socketRef.current.disconnect();
+            socketRef.current = null;
+        }
+        peersRef.current.forEach(({ pc }) => pc.close());
+        peersRef.current.clear();
+        if (localStreamRef.current) {
+            localStreamRef.current.getTracks().forEach((t) => t.stop());
+            localStreamRef.current = null;
+        }
+        setJoined(false);
+        onClose();
+    };
+
+    useEffect(() => {
+        if (isOpen) {
+            joinRoom();
+        }
+        return () => {
+            if (joined) {
+                leaveRoom();
+            }
+        };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isOpen]);
+    
+    const createPeerEntry = async (peerId) => {
+        const entry = { pc: null, stream: new MediaStream(), id: peerId };
+        entry.pc = new RTCPeerConnection({ iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }] });
+        entry.pc.ontrack = (e) => {
+            entry.stream = e.streams[0] || new MediaStream([e.track]);
+            forceRender(x => x + 1);
+        };
+        entry.pc.onicecandidate = (e) => {
+            if (e.candidate && socketRef.current) {
+                socketRef.current.emit("signal", { to: peerId, data: { candidate: e.candidate } });
+            }
+        };
+        peersRef.current.set(peerId, entry);
+        return entry;
+    };
+
+    const addLocalTracks = async (pc) => {
+        if (!localStreamRef.current) return;
+        for (const track of localStreamRef.current.getTracks()) {
+            pc.addTrack(track, localStreamRef.current);
+        }
+    };
+
+    const callPeer = async (peerId) => {
+        const entry = await createPeerEntry(peerId);
+        await addLocalTracks(entry.pc);
+        const offer = await entry.pc.createOffer();
+        await entry.pc.setLocalDescription(offer);
+        socketRef.current.emit("signal", { to: peerId, data: entry.pc.localDescription });
+    };
+
+    const joinRoom = async () => {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+        localStreamRef.current = stream;
+        if (localVideoRef.current) {
+            localVideoRef.current.srcObject = stream;
+        }
+
+        socketRef.current = io(SIGNAL_URL, { transports: ["websocket"] });
+        socketRef.current.on("connect", () => {
+            socketRef.current.emit("join-room", { roomId, username });
+            setJoined(true);
+        });
+
+        socketRef.current.on("existing-peers", async (peerIds) => {
+            for (const id of peerIds) await callPeer(id);
+        });
+        socketRef.current.on("peer-joined", (peerId) => callPeer(peerId));
+        socketRef.current.on("peer-left", (peerId) => {
+            const entry = peersRef.current.get(peerId);
+            if (entry) {
+                entry.pc.close();
+                peersRef.current.delete(peerId);
+                forceRender(x => x + 1);
+            }
+        });
+        socketRef.current.on("signal", async ({ from, data }) => {
+            let entry = peersRef.current.get(from);
+            if (!entry) entry = await createPeerEntry(from);
+            const { pc } = entry;
+            if (data.type === "offer") {
+                await pc.setRemoteDescription(new RTCSessionDescription(data));
+                await addLocalTracks(pc);
+                const answer = await pc.createAnswer();
+                await pc.setLocalDescription(answer);
+                socketRef.current.emit("signal", { to: from, data: pc.localDescription });
+            } else if (data.type === "answer") {
+                await pc.setRemoteDescription(new RTCSessionDescription(data));
+            } else if (data.candidate) {
+                await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+            }
+        });
+    };
+
+    const toggleMic = () => {
+        if (!localStreamRef.current) return;
+        localStreamRef.current.getAudioTracks().forEach((t) => (t.enabled = !t.enabled));
+        setMicOn(e => !e);
+    };
+    const toggleCam = () => {
+        if (!localStreamRef.current) return;
+        localStreamRef.current.getVideoTracks().forEach((t) => (t.enabled = !t.enabled));
+        setCamOn(e => !e);
+    };
+
+    if (!isOpen) return null;
+
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-80 flex flex-col items-center justify-center z-50 text-white p-4">
+            <h2 className="text-2xl font-bold mb-4">Video Call - Room: {roomId}</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full h-3/4">
+                <div className="bg-black rounded-lg overflow-hidden relative"><video ref={localVideoRef} autoPlay playsInline muted className="w-full h-full object-cover" /><div className="absolute bottom-2 left-2 bg-black/50 p-1 rounded">{username} (You)</div></div>
+                {[...peersRef.current.values()].map(({ id, stream }) => (
+                    <div key={id} className="bg-black rounded-lg overflow-hidden relative"><PeerVideo stream={stream} /><div className="absolute bottom-2 left-2 bg-black/50 p-1 rounded">Peer</div></div>
+                ))}
+            </div>
+            <div className="flex items-center gap-4 mt-4">
+                <button onClick={toggleMic} className={`p-3 rounded-full ${micOn ? 'bg-gray-600' : 'bg-red-600'}`}>{micOn ? <Mic /> : <MicOff />}</button>
+                <button onClick={toggleCam} className={`p-3 rounded-full ${camOn ? 'bg-gray-600' : 'bg-red-600'}`}>{camOn ? <Video /> : <VideoOff />}</button>
+                <button onClick={leaveRoom} className="px-6 py-3 bg-red-600 rounded-lg font-semibold">Leave Call</button>
+            </div>
+        </div>
+    );
+};
+
+function PeerVideo({ stream }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (ref.current) ref.current.srcObject = stream;
+  }, [stream]);
+  return <video ref={ref} autoPlay playsInline className="w-full h-full object-cover" />;
+}
+
 // --- Main Dashboard Component ---
 
 export default function Dashboard() {
@@ -113,6 +266,8 @@ export default function Dashboard() {
   const [isStatusModalOpen, setStatusModalOpen] = useState(false);
   const [isTeamModalOpen, setTeamModalOpen] = useState(false);
   const [isTaskModalOpen, setTaskModalOpen] = useState(false);
+  const [isCallModalOpen, setCallModalOpen] = useState(false);
+  const [isCallActive, setIsCallActive] = useState(false);
   const [taskToUpdate, setTaskToUpdate] = useState(null);
   const [currentMessage, setCurrentMessage] = useState("");
   const [chatMessages, setChatMessages] = useState([]);
@@ -147,6 +302,13 @@ export default function Dashboard() {
     if (!selectedProject) { setTasks([]); setChatMessages([]); return; }
     const fetchProjectData = async () => {
       const token = localStorage.getItem('token');
+      // Fetch call status
+      const callStatusResponse = await fetch(`${host}/api/video/status/${selectedProject._id}`, { headers: { 'auth-token': token } });
+      if (callStatusResponse.ok) {
+          const { isActive } = await callStatusResponse.json();
+          setIsCallActive(isActive);
+      }
+      // Fetch tasks & chat
       const taskResponse = await fetch(`${host}/api/tasks/fetchalltasks/${selectedProject._id}`, { headers: { 'auth-token': token } });
       if (taskResponse.ok) setTasks(await taskResponse.json());
       const chatResponse = await fetch(`${host}/api/chat/${selectedProject._id}`, { headers: { 'auth-token': token } });
@@ -156,39 +318,35 @@ export default function Dashboard() {
   }, [selectedProject]);
 
   useEffect(() => {
-    if (selectedProject) socket.emit('join_project', selectedProject._id);
-    const messageListener = (data) => { if (data.projectId === selectedProject?._id) setChatMessages((list) => [...list, data]); };
-    socket.on('receive_message', messageListener);
-    return () => socket.off('receive_message', messageListener);
+    if (selectedProject) {
+        chatSocket.emit('join_project', selectedProject._id);
+        
+        const messageListener = (data) => { if (data.projectId === selectedProject?._id) setChatMessages((list) => [...list, data]); };
+        chatSocket.on('receive_message', messageListener);
+
+        const callStatusListener = (data) => {
+            if (data.projectId === selectedProject._id) {
+                setIsCallActive(data.isActive);
+            }
+        };
+        chatSocket.on('call-status-change', callStatusListener);
+
+        return () => {
+            chatSocket.off('receive_message', messageListener);
+            chatSocket.off('call-status-change', callStatusListener);
+        };
+    }
   }, [selectedProject]);
 
   useEffect(() => { if (chatBodyRef.current) chatBodyRef.current.scrollTop = chatBodyRef.current.scrollHeight; }, [chatMessages]);
 
   const handleSendMessage = async () => {
     if (currentMessage.trim() === "" || !selectedProject || !currentUser) return;
-    
     const tempMessage = currentMessage;
-    setCurrentMessage(""); // Clear input immediately for better UX
-
-    const messageData = { 
-      projectId: selectedProject._id, 
-      sender: { _id: currentUser._id, name: currentUser.name }, 
-      content: tempMessage, 
-      timestamp: new Date().toISOString() 
-    };
-    
-    // Emit message to WebSocket server. The listener will update the state for all clients.
-    await socket.emit('send_message', messageData);
-    
-    // Persist message to the database via API
-    await fetch(`${host}/api/chat/sendmessage`, { 
-      method: 'POST', 
-      headers: { 
-        'Content-Type': 'application/json', 
-        'auth-token': localStorage.getItem('token') 
-      }, 
-      body: JSON.stringify({ content: tempMessage, projectId: selectedProject._id }) 
-    });
+    setCurrentMessage("");
+    const messageData = { projectId: selectedProject._id, sender: { _id: currentUser._id, name: currentUser.name }, content: tempMessage, timestamp: new Date().toISOString() };
+    await chatSocket.emit('send_message', messageData);
+    await fetch(`${host}/api/chat/sendmessage`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'auth-token': localStorage.getItem('token') }, body: JSON.stringify({ content: tempMessage, projectId: selectedProject._id }) });
   };
 
   const handleLogout = () => { localStorage.removeItem('token'); navigate('/login'); };
@@ -198,6 +356,7 @@ export default function Dashboard() {
   const handleStatusUpdate = (updatedTask) => setTasks(prevTasks => prevTasks.map(t => t._id === updatedTask._id ? updatedTask : t));
   
   const isTeamLead = selectedProject && currentUser && selectedProject.teamLead._id === currentUser._id;
+  const isTeamMember = selectedProject && currentUser && (isTeamLead || selectedProject.team.some(member => member._id === currentUser._id));
   const filteredTasks = isTeamLead ? tasks : tasks.filter(task => task.assignedTo._id === currentUser?._id);
 
   return (
@@ -206,6 +365,7 @@ export default function Dashboard() {
       {selectedProject && <ManageTeamModal isOpen={isTeamModalOpen} onClose={() => setTeamModalOpen(false)} project={selectedProject} onTeamUpdate={fetchProjects} />}
       {selectedProject && <TaskModal isOpen={isTaskModalOpen} onClose={() => setTaskModalOpen(false)} project={selectedProject} onTaskCreated={handleTaskCreated} />}
       {taskToUpdate && <StatusUpdateModal isOpen={isStatusModalOpen} onClose={() => setStatusModalOpen(false)} task={taskToUpdate} onStatusUpdate={handleStatusUpdate} isTeamLead={isTeamLead} />}
+      {selectedProject && currentUser && <VideoCallModal isOpen={isCallModalOpen} onClose={() => setCallModalOpen(false)} roomId={selectedProject._id} username={currentUser.name} />}
       
       <div className="h-screen w-screen bg-gray-50 text-gray-800 flex overflow-hidden font-sans">
         <motion.div className="group relative bg-white border-r border-gray-200 flex flex-col" initial="collapsed" whileHover="expanded" variants={{ expanded: { width: '16rem' }, collapsed: { width: '4rem' } }} transition={{ type: 'spring', stiffness: 100, damping: 15 }}>
@@ -219,7 +379,13 @@ export default function Dashboard() {
             <AnimatePresence mode="wait">
               {!selectedProject ? <EmptyState key="empty" /> : (
                 <motion.div key={selectedProject._id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}>
-                   <div className="flex justify-between items-center mb-6"><div><h1 className="text-3xl font-bold tracking-tight text-gray-900">{selectedProject.name}</h1><p className="text-gray-500 mt-1">{selectedProject.description}</p></div><div className="flex items-center space-x-2">{isTeamLead && <><button onClick={() => setTeamModalOpen(true)} className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-indigo-600 bg-indigo-50 rounded-lg hover:bg-indigo-100"><UserPlus size={16} /><span>Manage Team</span></button><button onClick={() => setTaskModalOpen(true)} className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg shadow-sm hover:bg-indigo-700"><PlusCircle size={16} /><span>New Task</span></button></>}</div></div>
+                   <div className="flex justify-between items-center mb-6"><div><h1 className="text-3xl font-bold tracking-tight text-gray-900">{selectedProject.name}</h1><p className="text-gray-500 mt-1">{selectedProject.description}</p></div><div className="flex items-center space-x-2">
+                   {isTeamMember && (
+                        <button onClick={() => setCallModalOpen(true)} className={`flex items-center gap-2 px-4 py-2 text-sm font-medium text-white rounded-lg shadow-sm ${isCallActive ? 'bg-blue-500 hover:bg-blue-600 animate-pulse' : 'bg-green-500 hover:bg-green-600'}`}>
+                            <Video size={16} /><span>{isCallActive ? 'Join Call' : 'Start Video Call'}</span>
+                        </button>
+                    )}
+                   {isTeamLead && <><button onClick={() => setTeamModalOpen(true)} className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-indigo-600 bg-indigo-50 rounded-lg hover:bg-indigo-100"><UserPlus size={16} /><span>Manage Team</span></button><button onClick={() => setTaskModalOpen(true)} className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg shadow-sm hover:bg-indigo-700"><PlusCircle size={16} /><span>New Task</span></button></>}</div></div>
                     <div className="bg-white rounded-xl shadow-md border border-gray-200 overflow-hidden">
                       <div className="grid grid-cols-12 px-6 py-3 text-xs font-semibold text-gray-500 uppercase bg-gray-50 border-b"><div className="col-span-4">Task</div><div className="col-span-2">Status</div><div className="col-span-2">Assigned By</div><div className="col-span-2">Assigned To</div><div className="col-span-2">Due Date</div></div>
                       <div>{filteredTasks.map((task) => <motion.div key={task._id} className="grid grid-cols-12 items-center px-6 py-4 border-b border-gray-100 text-sm"><div className="col-span-4 font-semibold">{task.title}</div><div className="col-span-2"><StatusBadge status={task.status} onClick={() => openStatusModal(task)} /></div><div className="col-span-2">{task.assignedBy.name}</div><div className="col-span-2">{task.assignedTo.name}</div><div className="col-span-2 text-gray-600">{new Date(task.dueDate).toLocaleDateString()}</div></motion.div>)}</div>

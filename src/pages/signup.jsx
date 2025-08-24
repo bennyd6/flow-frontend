@@ -101,7 +101,7 @@ export default function Signup() {
             type="url"
             name="github"
             id="github"
-            placeholder="GitHub Profile URL (Optional)"
+            placeholder="GitHub Profile URL"
             value={credentials.github}
             onChange={onChange}
           />
