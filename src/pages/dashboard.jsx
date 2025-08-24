@@ -142,8 +142,8 @@ const VideoCallModal = ({ isOpen, onClose, roomId, username }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [isOpen]);
     
-    const createPeerEntry = async (peerId) => {
-        const entry = { pc: null, stream: new MediaStream(), id: peerId };
+    const createPeerEntry = async (peerId, peerUsername) => {
+        const entry = { pc: null, stream: new MediaStream(), id: peerId, username: peerUsername };
         entry.pc = new RTCPeerConnection({ iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }] });
         entry.pc.ontrack = (e) => {
             entry.stream = e.streams[0] || new MediaStream([e.track]);
@@ -165,8 +165,8 @@ const VideoCallModal = ({ isOpen, onClose, roomId, username }) => {
         }
     };
 
-    const callPeer = async (peerId) => {
-        const entry = await createPeerEntry(peerId);
+    const callPeer = async (peerId, peerUsername) => {
+        const entry = await createPeerEntry(peerId, peerUsername);
         await addLocalTracks(entry.pc);
         const offer = await entry.pc.createOffer();
         await entry.pc.setLocalDescription(offer);
@@ -186,10 +186,10 @@ const VideoCallModal = ({ isOpen, onClose, roomId, username }) => {
             setJoined(true);
         });
 
-        socketRef.current.on("existing-peers", async (peerIds) => {
-            for (const id of peerIds) await callPeer(id);
+        socketRef.current.on("existing-peers", async (peers) => {
+            for (const peer of peers) await callPeer(peer.id, peer.name);
         });
-        socketRef.current.on("peer-joined", (peerId) => callPeer(peerId));
+        socketRef.current.on("peer-joined", (peer) => callPeer(peer.id, peer.name));
         socketRef.current.on("peer-left", (peerId) => {
             const entry = peersRef.current.get(peerId);
             if (entry) {
@@ -200,7 +200,8 @@ const VideoCallModal = ({ isOpen, onClose, roomId, username }) => {
         });
         socketRef.current.on("signal", async ({ from, data }) => {
             let entry = peersRef.current.get(from);
-            if (!entry) entry = await createPeerEntry(from);
+            // Username is unknown for incoming offers, but that's okay.
+            if (!entry) entry = await createPeerEntry(from, 'Anonymous');
             const { pc } = entry;
             if (data.type === "offer") {
                 await pc.setRemoteDescription(new RTCSessionDescription(data));
@@ -234,8 +235,8 @@ const VideoCallModal = ({ isOpen, onClose, roomId, username }) => {
             <h2 className="text-2xl font-bold mb-4">Video Call - Room: {roomId}</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full h-3/4">
                 <div className="bg-black rounded-lg overflow-hidden relative"><video ref={localVideoRef} autoPlay playsInline muted className="w-full h-full object-cover" /><div className="absolute bottom-2 left-2 bg-black/50 p-1 rounded">{username} (You)</div></div>
-                {[...peersRef.current.values()].map(({ id, stream }) => (
-                    <div key={id} className="bg-black rounded-lg overflow-hidden relative"><PeerVideo stream={stream} /><div className="absolute bottom-2 left-2 bg-black/50 p-1 rounded">Peer</div></div>
+                {[...peersRef.current.values()].map(({ id, stream, username }) => (
+                    <div key={id} className="bg-black rounded-lg overflow-hidden relative"><PeerVideo stream={stream} username={username} /></div>
                 ))}
             </div>
             <div className="flex items-center gap-4 mt-4">
@@ -247,12 +248,17 @@ const VideoCallModal = ({ isOpen, onClose, roomId, username }) => {
     );
 };
 
-function PeerVideo({ stream }) {
+function PeerVideo({ stream, username }) {
   const ref = useRef(null);
   useEffect(() => {
     if (ref.current) ref.current.srcObject = stream;
   }, [stream]);
-  return <video ref={ref} autoPlay playsInline className="w-full h-full object-cover" />;
+  return (
+      <>
+        <video ref={ref} autoPlay playsInline className="w-full h-full object-cover" />
+        <div className="absolute bottom-2 left-2 bg-black/50 p-1 rounded">{username}</div>
+      </>
+  );
 }
 
 // --- Main Dashboard Component ---
@@ -302,13 +308,11 @@ export default function Dashboard() {
     if (!selectedProject) { setTasks([]); setChatMessages([]); return; }
     const fetchProjectData = async () => {
       const token = localStorage.getItem('token');
-      // Fetch call status
       const callStatusResponse = await fetch(`${host}/api/video/status/${selectedProject._id}`, { headers: { 'auth-token': token } });
       if (callStatusResponse.ok) {
           const { isActive } = await callStatusResponse.json();
           setIsCallActive(isActive);
       }
-      // Fetch tasks & chat
       const taskResponse = await fetch(`${host}/api/tasks/fetchalltasks/${selectedProject._id}`, { headers: { 'auth-token': token } });
       if (taskResponse.ok) setTasks(await taskResponse.json());
       const chatResponse = await fetch(`${host}/api/chat/${selectedProject._id}`, { headers: { 'auth-token': token } });
