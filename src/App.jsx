@@ -12,6 +12,7 @@ import Dashboard from './pages/dashboard';
 import Login from './pages/login'; // Assuming Login.jsx is in pages folder
 import Signup from './pages/signup'; // Assuming Signup.jsx is in pages folder
 import './App.css';
+import GithubDashboard from './pages/githubDashboard';
 
 // --- Protected Route Component ---
 // This component checks for an auth token in localStorage.
@@ -43,6 +44,10 @@ function App() {
               <Dashboard />
             </ProtectedRoute>
           } 
+        />
+              <Route 
+          path="/github" 
+          element={<ProtectedRoute><GithubDashboard /></ProtectedRoute>}
         />
       </Routes>
     </Router>
