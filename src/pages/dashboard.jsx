@@ -166,12 +166,29 @@ export default function Dashboard() {
 
   const handleSendMessage = async () => {
     if (currentMessage.trim() === "" || !selectedProject || !currentUser) return;
-    const messageData = { projectId: selectedProject._id, sender: { _id: currentUser._id, name: currentUser.name }, content: currentMessage, timestamp: new Date().toISOString() };
-    await socket.emit('send_message', messageData);
-    setChatMessages((list) => [...list, messageData]); 
+    
     const tempMessage = currentMessage;
-    setCurrentMessage("");
-    await fetch(`${host}/api/chat/sendmessage`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'auth-token': localStorage.getItem('token') }, body: JSON.stringify({ content: tempMessage, projectId: selectedProject._id }) });
+    setCurrentMessage(""); // Clear input immediately for better UX
+
+    const messageData = { 
+      projectId: selectedProject._id, 
+      sender: { _id: currentUser._id, name: currentUser.name }, 
+      content: tempMessage, 
+      timestamp: new Date().toISOString() 
+    };
+    
+    // Emit message to WebSocket server. The listener will update the state for all clients.
+    await socket.emit('send_message', messageData);
+    
+    // Persist message to the database via API
+    await fetch(`${host}/api/chat/sendmessage`, { 
+      method: 'POST', 
+      headers: { 
+        'Content-Type': 'application/json', 
+        'auth-token': localStorage.getItem('token') 
+      }, 
+      body: JSON.stringify({ content: tempMessage, projectId: selectedProject._id }) 
+    });
   };
 
   const handleLogout = () => { localStorage.removeItem('token'); navigate('/login'); };
