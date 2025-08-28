@@ -104,15 +104,16 @@ const StatusUpdateModal = ({ isOpen, onClose, task, onStatusUpdate, isTeamLead }
 };
 
 const VideoCallModal = ({ isOpen, onClose, roomId, username }) => {
-    const [joined, setJoined] = useState(false);
     const [micOn, setMicOn] = useState(true);
     const [camOn, setCamOn] = useState(true);
+    const [peers, setPeers] = useState(new Map());
 
     const socketRef = useRef(null);
     const localStreamRef = useRef(null);
-    const peersRef = useRef(new Map());
-    const [, forceRender] = useState(0);
     const localVideoRef = useRef(null);
+    const peersRef = useRef(new Map());
+
+    const updatePeers = () => setPeers(new Map(peersRef.current));
 
     const leaveRoom = () => {
         if (socketRef.current) {
@@ -126,68 +127,73 @@ const VideoCallModal = ({ isOpen, onClose, roomId, username }) => {
             localStreamRef.current.getTracks().forEach((t) => t.stop());
             localStreamRef.current = null;
         }
-        setJoined(false);
         onClose();
     };
 
     useEffect(() => {
-        if (isOpen) {
-            joinRoom();
-        }
-        return () => {
-            if (joined) {
-                leaveRoom();
-            }
-        };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+        if (isOpen) joinRoom();
+        return () => { if (socketRef.current) leaveRoom(); };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [isOpen]);
     
     const createPeerEntry = async (peerId, peerUsername) => {
-        const entry = { pc: null, stream: new MediaStream(), id: peerId, username: peerUsername };
-        entry.pc = new RTCPeerConnection({ iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }] });
-        entry.pc.ontrack = (e) => {
-            entry.stream = e.streams[0] || new MediaStream([e.track]);
-            forceRender(x => x + 1);
+        const pc = new RTCPeerConnection({ iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }] });
+        const entry = { pc, id: peerId, username: peerUsername, stream: new MediaStream(), connectionState: 'connecting' };
+        
+        pc.ontrack = (e) => {
+            entry.stream = e.streams[0];
+            updatePeers();
         };
-        entry.pc.onicecandidate = (e) => {
-            if (e.candidate && socketRef.current) {
-                socketRef.current.emit("signal", { to: peerId, data: { candidate: e.candidate } });
-            }
+        pc.onicecandidate = (e) => {
+            if (e.candidate) socketRef.current.emit("signal", { to: peerId, data: { candidate: e.candidate } });
         };
+        pc.oniceconnectionstatechange = () => {
+            entry.connectionState = pc.iceConnectionState;
+            if (pc.iceConnectionState === 'failed') pc.restartIce?.();
+            updatePeers();
+        };
+
         peersRef.current.set(peerId, entry);
+        updatePeers();
         return entry;
     };
 
-    const addLocalTracks = async (pc) => {
+    const addLocalTracks = (pc) => {
         if (!localStreamRef.current) return;
-        for (const track of localStreamRef.current.getTracks()) {
-            pc.addTrack(track, localStreamRef.current);
-        }
+        localStreamRef.current.getTracks().forEach(track => pc.addTrack(track, localStreamRef.current));
     };
 
     const callPeer = async (peerId, peerUsername) => {
-        const entry = await createPeerEntry(peerId, peerUsername);
-        await addLocalTracks(entry.pc);
-        const offer = await entry.pc.createOffer();
-        await entry.pc.setLocalDescription(offer);
-        socketRef.current.emit("signal", { to: peerId, data: entry.pc.localDescription });
+        const { pc } = await createPeerEntry(peerId, peerUsername);
+        addLocalTracks(pc);
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        socketRef.current.emit("signal", { to: peerId, data: pc.localDescription });
     };
 
     const joinRoom = async () => {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
-        localStreamRef.current = stream;
-        if (localVideoRef.current) {
-            localVideoRef.current.srcObject = stream;
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+            localStreamRef.current = stream;
+            if (localVideoRef.current) localVideoRef.current.srcObject = stream;
+        } catch (err) {
+            alert("Camera and microphone access is required for video calls. Please grant permission and try again.");
+            onClose();
+            return;
         }
 
         socketRef.current = io(SIGNAL_URL, { transports: ["websocket"] });
-        socketRef.current.on("connect", () => {
-            socketRef.current.emit("join-room", { roomId, username });
-            setJoined(true);
+        socketRef.current.on('connect_error', () => {
+            alert("Failed to connect to the video server.");
+            leaveRoom();
         });
 
-        socketRef.current.on("existing-peers", async (peers) => {
-            for (const peer of peers) await callPeer(peer.id, peer.name);
+        socketRef.current.on("connect", () => {
+            socketRef.current.emit("join-room", { roomId, username });
+        });
+
+        socketRef.current.on("existing-peers", (existingPeers) => {
+            for (const peer of existingPeers) callPeer(peer.id, peer.name);
         });
         socketRef.current.on("peer-joined", (peer) => callPeer(peer.id, peer.name));
         socketRef.current.on("peer-left", (peerId) => {
@@ -195,16 +201,17 @@ const VideoCallModal = ({ isOpen, onClose, roomId, username }) => {
             if (entry) {
                 entry.pc.close();
                 peersRef.current.delete(peerId);
-                forceRender(x => x + 1);
+                updatePeers();
             }
         });
-        socketRef.current.on("signal", async ({ from, data }) => {
+        socketRef.current.on("signal", async ({ from, name, data }) => {
             let entry = peersRef.current.get(from);
-            if (!entry) entry = await createPeerEntry(from, 'Anonymous');
+            if (!entry) entry = await createPeerEntry(from, name);
+            
             const { pc } = entry;
             if (data.type === "offer") {
                 await pc.setRemoteDescription(new RTCSessionDescription(data));
-                await addLocalTracks(pc);
+                addLocalTracks(pc);
                 const answer = await pc.createAnswer();
                 await pc.setLocalDescription(answer);
                 socketRef.current.emit("signal", { to: from, data: pc.localDescription });
@@ -216,16 +223,8 @@ const VideoCallModal = ({ isOpen, onClose, roomId, username }) => {
         });
     };
 
-    const toggleMic = () => {
-        if (!localStreamRef.current) return;
-        localStreamRef.current.getAudioTracks().forEach((t) => (t.enabled = !t.enabled));
-        setMicOn(e => !e);
-    };
-    const toggleCam = () => {
-        if (!localStreamRef.current) return;
-        localStreamRef.current.getVideoTracks().forEach((t) => (t.enabled = !t.enabled));
-        setCamOn(e => !e);
-    };
+    const toggleMic = () => { localStreamRef.current?.getAudioTracks().forEach(t => t.enabled = !t.enabled); setMicOn(e => !e); };
+    const toggleCam = () => { localStreamRef.current?.getVideoTracks().forEach(t => t.enabled = !t.enabled); setCamOn(e => !e); };
 
     if (!isOpen) return null;
 
@@ -234,9 +233,7 @@ const VideoCallModal = ({ isOpen, onClose, roomId, username }) => {
             <h2 className="text-2xl font-bold mb-4">Video Call - Room: {roomId}</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full h-3/4">
                 <div className="bg-black rounded-lg overflow-hidden relative"><video ref={localVideoRef} autoPlay playsInline muted className="w-full h-full object-cover" /><div className="absolute bottom-2 left-2 bg-black/50 p-1 rounded">{username} (You)</div></div>
-                {[...peersRef.current.values()].map(({ id, stream, username }) => (
-                    <div key={id} className="bg-black rounded-lg overflow-hidden relative"><PeerVideo stream={stream} username={username} /></div>
-                ))}
+                {[...peers.values()].map(peer => <PeerVideo key={peer.id} {...peer} />)}
             </div>
             <div className="flex items-center gap-4 mt-4">
                 <button onClick={toggleMic} className={`p-3 rounded-full ${micOn ? 'bg-gray-600' : 'bg-red-600'}`}>{micOn ? <Mic /> : <MicOff />}</button>
@@ -247,16 +244,17 @@ const VideoCallModal = ({ isOpen, onClose, roomId, username }) => {
     );
 };
 
-function PeerVideo({ stream, username }) {
+function PeerVideo({ stream, username, connectionState }) {
   const ref = useRef(null);
   useEffect(() => {
     if (ref.current) ref.current.srcObject = stream;
   }, [stream]);
   return (
-      <>
+      <div className="bg-black rounded-lg overflow-hidden relative w-full h-full">
         <video ref={ref} autoPlay playsInline className="w-full h-full object-cover" />
-        <div className="absolute bottom-2 left-2 bg-black/50 p-1 rounded">{username}</div>
-      </>
+        <div className="absolute bottom-2 left-2 bg-black/50 px-2 py-1 rounded text-sm">{username}</div>
+        {connectionState !== 'connected' && <div className="absolute top-2 right-2 bg-black/50 px-2 py-1 rounded text-xs capitalize">{connectionState}...</div>}
+      </div>
   );
 }
 
@@ -410,7 +408,7 @@ export default function Dashboard() {
           <div className="p-4 border-t border-gray-200"><a href="#" onClick={handleLogout} className="flex items-center p-2 rounded-lg text-gray-600 hover:bg-red-50 hover:text-red-600"><LogOut className="w-8 h-8 flex-shrink-0" /><motion.span className="ml-4 font-medium whitespace-nowrap hidden group-hover:block">Logout</motion.span></a></div>
         </motion.div>
 
-        <div className="flex-1 flex flex-col"><header className="h-16 flex items-center justify-center relative"><nav className="bg-white/70 backdrop-blur-sm border border-gray-200 rounded-full px-4 py-2 flex items-center space-x-4 shadow-sm"><a href="#" className="px-3 py-1 text-sm font-medium text-white bg-indigo-600 rounded-full">Dashboard</a><a href="/github" className="px-3 py-1 text-sm font-medium text-gray-700 hover:text-indigo-600">GitHub Stats</a></nav><div className="absolute right-6 top-1/2 -translate-y-1/2 flex items-center space-x-2"><img src={`https://i.pravatar.cc/150?u=${currentUser?._id}`} alt="User Avatar" className="w-8 h-8 rounded-full" /><span className="text-sm font-medium">{currentUser?.name}</span></div></header>
+        <div className="flex-1 flex flex-col"><header className="h-16 flex items-center justify-center relative"><nav className="bg-white/70 backdrop-blur-sm border border-gray-200 rounded-full px-4 py-2 flex items-center space-x-4 shadow-sm"><a href="/dashboard" className="px-3 py-1 text-sm font-medium text-white bg-indigo-600 rounded-full">Dashboard</a><a href="/github" className="px-3 py-1 text-sm font-medium text-gray-700 hover:text-indigo-600">GitHub Stats</a></nav><div className="absolute right-6 top-1/2 -translate-y-1/2 flex items-center space-x-2"><img src={`https://i.pravatar.cc/150?u=${currentUser?._id}`} alt="User Avatar" className="w-8 h-8 rounded-full" /><span className="text-sm font-medium">{currentUser?.name}</span></div></header>
           <main className="flex-1 p-6 overflow-y-auto">
             <AnimatePresence mode="wait">
               {!selectedProject ? <EmptyState key="empty" /> : (
@@ -446,5 +444,5 @@ export default function Dashboard() {
         </motion.div>
       </div>
     </>
-  )
+  );
 }
