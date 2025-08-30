@@ -4,7 +4,7 @@ import { PieChart, Pie, Cell, Tooltip, Legend, BarChart, Bar, XAxis, YAxis, Cart
 import { ArrowLeft } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
-const GITHUB_API_URL = "https://flow-backend-ztda.onrender.com/api/github";
+const GITHUB_API_URL = "http://localhost:3000/api/github";
 
 const COLORS = ["#8884d8", "#82ca9d", "#ffc658", "#ff7f50", "#00c49f", "#0088fe"];
 
