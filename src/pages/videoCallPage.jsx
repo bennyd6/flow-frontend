@@ -6,8 +6,32 @@ import { Mic, MicOff, Video, VideoOff, PhoneOff, ArrowLeft } from 'lucide-react'
 const host = "https://flow-backend-ztda.onrender.com";
 const SIGNAL_URL = `${host}/video`;
 
+// --- WebRTC Configuration ---
+// ✨ FIX: Added a TURN server to the configuration.
+// This is the crucial fallback for when a direct STUN connection fails
+// between users on different, restrictive networks.
+const ICE_SERVERS = {
+  iceServers: [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" },
+    // --- Free TURN Server for Development/Testing ---
+    // IMPORTANT: This is a public, free-to-use server. 
+    // For a production application, you should deploy your own TURN server (e.g., Coturn).
+    {
+      urls: "turn:openrelay.metered.ca:80",
+      username: "openrelayproject",
+      credential: "openrelayproject",
+    },
+    {
+      urls: "turn:openrelay.metered.ca:443",
+      username: "openrelayproject",
+      credential: "openrelayproject",
+    },
+  ],
+};
+
+
 // --- Peer Video Component ---
-// This component is responsible for rendering a single peer's video feed.
 function PeerVideo({ stream, username, connectionState }) {
   const ref = useRef(null);
   useEffect(() => {
@@ -34,7 +58,7 @@ function PeerVideo({ stream, username, connectionState }) {
   );
 }
 
-// --- Main Video Call Page (Rewritten for Stability) ---
+// --- Main Video Call Page ---
 export default function VideoCallPage() {
     const { projectId } = useParams();
     const navigate = useNavigate();
@@ -46,18 +70,15 @@ export default function VideoCallPage() {
     const [isConnecting, setIsConnecting] = useState(true);
     const [error, setError] = useState(null);
 
-    // Refs for managing WebRTC objects without causing re-renders
     const socketRef = useRef(null);
     const localStreamRef = useRef(null);
     const localVideoRef = useRef(null);
-    const peersRef = useRef(new Map()); // Maps peerId to their connection object { pc, id, username, ... }
-    const pendingCandidatesRef = useRef(new Map()); // Maps peerId to an array of queued ICE candidates
+    const peersRef = useRef(new Map());
+    const pendingCandidatesRef = useRef(new Map());
     
-    // CRITICAL FIX: Refs to prevent race conditions
-    const activePeersRef = useRef(new Set()); // Tracks ONLY active peer IDs to prevent duplicates
-    const peerCreationLockRef = useRef(new Set()); // Prevents concurrent creation of the same peer
+    const activePeersRef = useRef(new Set());
+    const peerCreationLockRef = useRef(new Set());
 
-    // Stable cleanup function
     const leaveRoom = useCallback(() => {
         if (socketRef.current) {
             socketRef.current.emit('leave-room');
@@ -76,15 +97,13 @@ export default function VideoCallPage() {
         navigate('/dashboard');
     }, [navigate]);
 
-    // Stable function to update the React state for rendering
     const updatePeersList = useCallback(() => {
         const validPeers = Array.from(activePeersRef.current)
             .map(peerId => peersRef.current.get(peerId))
-            .filter(Boolean); // Filter out any undefined entries
+            .filter(Boolean);
         setPeers(validPeers);
     }, []);
 
-    // Function to process queued ICE candidates after the remote description is set
     const processPendingCandidates = useCallback(async (peerId) => {
         const candidates = pendingCandidatesRef.current.get(peerId) || [];
         const peer = peersRef.current.get(peerId);
@@ -100,17 +119,16 @@ export default function VideoCallPage() {
         }
     }, []);
 
-    // This is the core of the fix: a completely rewritten peer creation function with locks
     const createPeerConnection = useCallback((peerId, peerUsername, isInitiator = false) => {
-        // ATOMIC CHECK: If peer is being created or already exists, abort immediately
         if (peerCreationLockRef.current.has(peerId) || activePeersRef.current.has(peerId)) {
             return;
         }
         
-        peerCreationLockRef.current.add(peerId); // LOCK this peer ID
+        peerCreationLockRef.current.add(peerId);
         
         try {
-            const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+            // ✨ FIX: Use the new ICE_SERVERS configuration
+            const pc = new RTCPeerConnection(ICE_SERVERS);
             const peerData = { pc, id: peerId, username: peerUsername, stream: null, connectionState: 'new' };
 
             peersRef.current.set(peerId, peerData);
@@ -147,11 +165,10 @@ export default function VideoCallPage() {
             updatePeersList();
             return peerData;
         } finally {
-            peerCreationLockRef.current.delete(peerId); // UNLOCK
+            peerCreationLockRef.current.delete(peerId);
         }
     }, [updatePeersList]);
 
-    // Stable function to handle incoming signals
     const handleSignal = useCallback(async ({ from, name, data }) => {
         let peerData = peersRef.current.get(from);
         
@@ -184,7 +201,6 @@ export default function VideoCallPage() {
         }
     }, [createPeerConnection, processPendingCandidates]);
     
-    // Stable function to remove a peer
     const removePeer = useCallback((peerId) => {
         const peerData = peersRef.current.get(peerId);
         if (peerData) peerData.pc.close();
@@ -195,7 +211,6 @@ export default function VideoCallPage() {
         updatePeersList();
     }, [updatePeersList]);
 
-    // This is the single, massive useEffect that runs only ONCE.
     useEffect(() => {
         let isMounted = true;
 
