@@ -12,7 +12,7 @@ import TaskModal from '../components/modals/taskModal';
 import StatusUpdateModal from '../components/modals/statusUpdateModal';
 import VideoCallModal from '../components/modals/videoCallModal';
 
-const host = "http://localhost:3000";
+const host = "https://flow-backend-ztda.onrender.com";
 const chatSocket = io.connect(host);
 
 export default function Dashboard() {

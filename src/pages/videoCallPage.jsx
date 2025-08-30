@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import io from 'socket.io-client';
 import { Mic, MicOff, Video, VideoOff, PhoneOff, ArrowLeft } from 'lucide-react';
 
-const host = "http://localhost:3000";
+const host = "https://flow-backend-ztda.onrender.com";
 const SIGNAL_URL = `${host}/video`;
 
 // --- Peer Video Component ---

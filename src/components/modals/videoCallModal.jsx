@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import io from 'socket.io-client';
 import { Mic, MicOff, Video, VideoOff } from 'lucide-react';
 
-const SIGNAL_URL = "http://localhost:3000/video";
+const SIGNAL_URL = "https://flow-backend-ztda.onrender.com/video";
 
 function PeerVideo({ stream, username, connectionState }) {
   const ref = useRef(null);
